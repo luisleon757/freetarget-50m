@@ -1,0 +1,33 @@
+# STM32CubeIDE / Eclipse
+.metadata/
+.settings/
+Debug/
+Release/
+*.launch
+*.log
+
+# Build artifacts
+*.o
+*.d
+*.elf
+*.hex
+*.bin
+*.map
+*.list
+
+# STM32Cube-generated backups
+*.bak
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# .NET / MAUI
+bin/
+obj/
+.vs/
+
+# Local acoustic captures may be large; add selected datasets explicitly.
+test-data/acoustic/raw/
