@@ -1,16 +1,182 @@
-# Preliminary pin map
+# NUCLEO-WB55RG prototype pin map
 
-This is a **working allocation**, not yet a PCB commitment. It must be checked against the exact NUCLEO-WB55RG board revision, solder bridges, debug/VCP routing and STM32 alternate-function table before hardware manufacture.
+Status: **datasheet/schematic validated; bench validation pending**.
 
-## Required resources
+This allocation is intended for the first FreeTarget 50 m prototype on the STMicroelectronics NUCLEO-WB55RG (MB1355). It is not yet a production-PCB commitment.
 
-- 4 hardware input-capture channels on one common timer, preferably TIM2 CH1..CH4
-- 4 ADC channels for microphone waveform capture
-- I2C for temperature sensor
-- 2 GPIO outputs for red/green high-power LED drivers
-- SWD/ST-LINK debugging
-- BLE radio via STM32WB stack
+The main goals are:
 
-## Design rule
+- timestamp four acoustic comparator edges on one common 32-bit timer;
+- acquire four analog microphone waveforms through ADC + DMA;
+- preserve SWD/ST-LINK debugging;
+- preserve the default ST-LINK virtual COM port where practical;
+- provide I2C for temperature sensing;
+- provide two independent GPIO outputs for external high-power red/green signal drivers;
+- avoid pins required by the STM32WB radio subsystem.
 
-Do not sacrifice SWD debugging for production I/O. VCP UART is desirable during development but secondary to correct timer/ADC routing.
+## Proposed prototype allocation
+
+| Function | MCU pin | Peripheral | NUCLEO connection | Status / note |
+| --- | --- | --- | --- | --- |
+| MIC N trigger | PA0 | TIM2_CH1, AF1 | CN7 pin 34 / Arduino A3 | Direct |
+| MIC E trigger | PA1 | TIM2_CH2, AF1 | CN7 pin 32 / Arduino A2 | Direct |
+| MIC S trigger | PB10 | TIM2_CH3 | CN10 pin 17 / Arduino D10 option | Requires D10 solder-bridge selection to PB10 |
+| MIC W trigger | PB11 | TIM2_CH4 | CN7 pin 1 | Direct |
+| MIC N waveform | PC0 | ADC1_IN1 | CN7 pin 28 / Arduino A0 | Direct |
+| MIC E waveform | PC1 | ADC1_IN2 | CN7 pin 30 / Arduino A1 | Direct |
+| MIC S waveform | PC2 | ADC1_IN3 | CN7 pin 38 / Arduino A5 | Direct |
+| MIC W waveform | PC3 | ADC1_IN4 | CN7 pin 36 / Arduino A4 | Direct |
+| Temperature SCL | PB8 | I2C1_SCL, AF4 | CN10 pin 3 / Arduino D15 | Direct |
+| Temperature SDA | PB9 | I2C1_SDA, AF4 | CN10 pin 5 / Arduino D14 | Direct |
+| Green signal driver | PC6 | GPIO output | CN10 pin 33 / Arduino D2 | Provisional |
+| Red signal driver | PC12 | GPIO output | CN10 pin 21 / Arduino D8 | Provisional |
+| ST-LINK VCP TX/RX | PA2 / PA3 | LPUART1 / board VCP routing | CN10 pins 35 / 37, Arduino D1 / D0 | Preserved by this allocation |
+| SWDIO | PA13 | SWD | CN7 pin 13 | Reserved for debug |
+| SWCLK | PA14 | SWD | CN7 pin 15 | Reserved for debug |
+
+Sensor names N/E/S/W are logical channel names. Their physical assignment may be reordered later if PCB routing is cleaner, provided the firmware channel map remains explicit.
+
+## Why TIM2 uses PA0, PA1, PB10 and PB11
+
+STM32WB55RG provides one 32-bit four-channel general-purpose timer, TIM2. The selected pins expose all four channels:
+
+- PA0 -> TIM2_CH1
+- PA1 -> TIM2_CH2
+- PB10 -> TIM2_CH3
+- PB11 -> TIM2_CH4
+
+This is preferable to the superficially simpler PA0..PA3 mapping because PA2 and PA3 are used by the NUCLEO board's default ST-LINK VCP routing. Using PB10/PB11 for channels 3/4 lets development retain the VCP UART while still timestamping all four sensors from the same TIM2 counter.
+
+The working timer target remains 16 MHz, giving a 62.5 ns tick. The exact APB/timer clock and prescaler must be generated and checked in CubeMX rather than assumed in source code.
+
+## PB10 / Arduino D10 solder-bridge requirement
+
+On MB1355 the Arduino D10 / CN10 pin 17 route is selectable between PA4 and PB10.
+
+The C-02 schematic shows the default D10 selection as PA4 (SB41 closed) with PB10 unselected (SB42 open). Before using PB10 on a physical NUCLEO-WB55RG, check the actual board revision and confirm the bridge state from the matching MB1355 schematic and with continuity if necessary.
+
+Expected prototype modification when the board matches that routing:
+
+1. disconnect PA4 from D10;
+2. connect PB10 to D10;
+3. verify PB10 continuity from MCU routing to CN10 pin 17;
+4. verify PA4 is no longer tied to the same header node.
+
+Do not perform bridge modifications based only on this document; confirm the MB1355 revision printed on the actual board first.
+
+## ADC architecture and important limitation
+
+PC0..PC3 map cleanly to ADC1_IN1..ADC1_IN4 and are exposed directly on the NUCLEO headers.
+
+The STM32WB55RG has **one ADC**, not four simultaneous ADC converters. Therefore the four microphone waveforms will be sampled as an ADC scan sequence and transferred by DMA. Samples from N/E/S/W are sequential in time rather than truly simultaneous.
+
+This is acceptable for the current architecture because:
+
+- deterministic arrival timestamps come from TIM2 input capture, not the ADC;
+- ADC data is supplementary evidence for event classification, diagnostics and neighboring-shot rejection;
+- any per-channel ADC sampling skew must be represented in tests if waveform phase relationships become part of a classifier.
+
+Before freezing the acquisition settings, measure the required waveform bandwidth and choose ADC clock, sample time, sequence length and DMA buffer size from real acoustic data. Do not make hit-position timing depend on ADC sample indices.
+
+## DMA
+
+STM32WB55RG provides DMA support for ADC and timers. The intended waveform path is:
+
+```text
+PC0..PC3 -> ADC1 scan sequence -> DMA -> acoustic ring/window buffer
+```
+
+The exact DMA controller/channel/request assignment should be generated by STM32CubeMX and checked for conflicts with the STM32WB software package. It is not frozen in this document.
+
+## Temperature sensor bus
+
+PB8/PB9 provide a conventional I2C1 pair:
+
+- PB8 -> I2C1_SCL
+- PB9 -> I2C1_SDA
+
+These pins are also the Arduino D15/D14 I2C positions, which simplifies temporary sensor wiring during development.
+
+External pull-ups must match the selected temperature sensor, bus voltage, wiring length and target rise time. Do not rely on MCU internal pull-ups as the production I2C pull-up network.
+
+## Rapid-fire signal outputs
+
+PC6 and PC12 are provisionally allocated as logic-level control outputs to external power-driver stages:
+
+- PC6 -> GREEN driver enable
+- PC12 -> RED driver enable
+
+The STM32 pins must not drive high-power LEDs directly. The hardware design must include the required MOSFET/current-driver circuitry, supply decoupling and protection.
+
+These outputs are simple ON/OFF controls; no PWM requirement is currently assumed. If later tests show that dimming or pulse shaping is useful, revisit the pin choice before PCB freeze.
+
+## Debug resources deliberately preserved
+
+### SWD
+
+PA13 and PA14 remain reserved for SWDIO and SWCLK. They are not candidates for application I/O.
+
+### ST-LINK VCP
+
+PA2 and PA3 remain unused by the acoustic timing allocation so the default development VCP can remain available. This is useful for early diagnostics even though BLE is the production communications path.
+
+### SWO
+
+PB3 is not required by the selected timer mapping. This avoids unnecessarily consuming or rerouting the SWO/JTDO-capable pin.
+
+## Pins intentionally avoided for core prototype functions
+
+- PA13 / PA14: SWD
+- PB3: SWO/JTDO capable; kept free
+- PA2 / PA3: retained for ST-LINK VCP
+- PC14 / PC15: LSE oscillator
+- RF / VDDRF / RF support pins: radio subsystem
+- pins connected to onboard user LEDs/buttons where a clean unloaded pin is available
+
+## CubeMX validation checklist
+
+Before creating the first `.ioc`, confirm all of the following in the installed STM32CubeWB version:
+
+- [ ] NUCLEO-WB55RG / STM32WB55RG target selected
+- [ ] TIM2 configured as 32-bit free-running timer
+- [ ] TIM2_CH1 input capture on PA0
+- [ ] TIM2_CH2 input capture on PA1
+- [ ] TIM2_CH3 input capture on PB10
+- [ ] TIM2_CH4 input capture on PB11
+- [ ] all four captures use the same edge/filter policy initially
+- [ ] timer clock/prescaler produces the intended 16 MHz counter
+- [ ] ADC1 regular sequence contains PC0, PC1, PC2, PC3
+- [ ] ADC DMA is enabled in circular or event-window-compatible form
+- [ ] PB8/PB9 configured as I2C1
+- [ ] PC6 and PC12 configured as GPIO outputs
+- [ ] PA13/PA14 remain SWD
+- [ ] PA2/PA3 VCP routing remains usable
+- [ ] BLE stack / CPU2 resources show no pin or peripheral conflict
+
+## Bench validation required before closing the pin-map issue
+
+Datasheet and board-schematic validation is not enough. On the actual NUCLEO-WB55RG:
+
+1. record the MB1355 PCB revision;
+2. verify the PA4/PB10 D10 solder-bridge state;
+3. configure TIM2 at the intended counter frequency;
+4. feed the same pulse-generator edge into all four trigger inputs;
+5. verify CH1..CH4 capture the same timer timebase with only expected electrical/path skew;
+6. run ADC1 + DMA across PC0..PC3 and verify channel ordering and sustained buffer operation;
+7. verify ST-LINK VCP still works concurrently;
+8. verify SWD debug remains reliable;
+9. start BLE advertising/connection while TIM2 capture and ADC DMA run;
+10. verify I2C communication on PB8/PB9;
+11. toggle PC6/PC12 into dummy loads or driver inputs and verify no board conflict.
+
+## Reference documents used for this allocation
+
+- STM32WB55xx / STM32WB35xx datasheet, DS11929, current Rev. 18 for MCU pin functions and peripheral capabilities.
+- STM32WB Nucleo-64 board MB1355 user manual, UM2819, for ST Morpho/Arduino connector routing.
+- MB1355-WB55RG C-02 and D-01 schematics for selectable board routing and solder bridges.
+
+## Current status
+
+The required peripheral set **fits on the NUCLEO-WB55RG without sacrificing SWD or the normal VCP UART**.
+
+The only identified board-routing modification in this prototype allocation is the PA4/PB10 selection for the D10/CN10 pin used by TIM2_CH3. Final acceptance remains contingent on CubeMX validation and bench testing on the exact board revision.
