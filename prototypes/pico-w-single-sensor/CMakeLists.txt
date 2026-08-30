@@ -4,12 +4,13 @@ if(NOT DEFINED ENV{PICO_SDK_PATH})
     message(FATAL_ERROR "PICO_SDK_PATH environment variable is not set")
 endif()
 
-include($ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake)
+# Select Pico W before importing/initialising the SDK.
+set(PICO_BOARD pico_w CACHE STRING "Board type")
+include("$ENV{PICO_SDK_PATH}/external/pico_sdk_import.cmake")
 
 project(ft50_pico_single_sensor C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
-set(PICO_BOARD pico_w)
 
 pico_sdk_init()
 
